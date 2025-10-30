@@ -95,9 +95,16 @@ if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
-// File upload middleware
-app.use('/uploads', express.static('uploads'));
-app.use('/test-files', express.static('test-files'));
+// File upload middleware - Use absolute paths with proper headers
+app.use('/uploads', (req, res, next) => {
+  // Set proper CORS headers for file access
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET');
+  res.setHeader('Content-Type', 'application/pdf');
+  next();
+}, express.static(path.join(__dirname, 'uploads')));
+
+app.use('/test-files', express.static(path.join(__dirname, 'test-files')));
 
 // Routes will be loaded after mongoose connection
 
