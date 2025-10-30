@@ -7,4 +7,9 @@ uploads/
 logs/
 *.log
 *.zip
+*.bat
 backend.zip
+frontend.zip
+package-lock.json
+render.yaml
+how --name-only efc7b34
