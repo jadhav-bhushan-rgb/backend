@@ -51,20 +51,31 @@ app.use(helmet({
 
 // CORS configuration for production
 const corsOptions = {
-  origin: [
-    'http://localhost:3000', // Development
-    'http://localhost:3001', // Alternative development port
-    'http://127.0.0.1:3000', // Alternative localhost
-    'http://127.0.0.1:3001', // Alternative localhost port
-    'https://komacut-frontend.onrender.com', // Production frontend
-    'https://comcat-frontend.onrender.com', // Alternative frontend URL
-    'https://comcat-frontends.onrender.com', // Your actual frontend URL
-    'https://netlify.app', // Netlify deployments
-    'https://*.netlify.app', // All Netlify subdomains
-    'https://vercel.app', // Vercel deployments
-    'https://*.vercel.app', // All Vercel subdomains
-    'https://*.onrender.com' // All Render subdomains
-  ],
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = [
+      'http://localhost:3000', // Development
+      'http://localhost:3001', // Alternative development port
+      'http://127.0.0.1:3000', // Alternative localhost
+      'http://127.0.0.1:3001', // Alternative localhost port
+      'https://komacut-frontend.onrender.com', // Production frontend
+      'https://comcat-frontend.onrender.com', // Alternative frontend URL
+      'https://comcat-frontends.onrender.com', // Your actual frontend URL
+      process.env.CLIENT_URL, // From environment variable
+    ].filter(Boolean); // Remove undefined values
+    
+    // Check if origin matches any allowed origin
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else if (origin.includes('.onrender.com') || origin.includes('.netlify.app') || origin.includes('.vercel.app')) {
+      // Allow all Render, Netlify, and Vercel subdomains
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
