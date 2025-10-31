@@ -232,7 +232,8 @@ mongoose.connect(MONGODB_URI, {
   
   // Explicit route for serving quotation PDFs (after all other routes)
   // This ensures PDF files are served even if routes are registered after static middleware
-  app.get('/api/uploads/quotations/:filename', (req, res) => {
+  // Also regenerates PDF if file doesn't exist (for Render ephemeral filesystem)
+  app.get('/api/uploads/quotations/:filename', async (req, res) => {
     try {
       const filename = req.params.filename;
       const filePath = path.join(__dirname, 'uploads', 'quotations', filename);
@@ -244,38 +245,120 @@ mongoose.connect(MONGODB_URI, {
       });
       
       // Check if file exists
-      if (!fs.existsSync(filePath)) {
-        console.error('PDF file not found:', filePath);
-        return res.status(404).json({
-          success: false,
-          message: 'PDF file not found',
-          filename: filename,
-          path: filePath
+      if (fs.existsSync(filePath)) {
+        // File exists, serve it directly
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+        
+        console.log('Sending existing PDF file:', filename);
+        return res.sendFile(filePath, (err) => {
+          if (err) {
+            console.error('Error sending PDF file:', err);
+            if (!res.headersSent) {
+              res.status(500).json({
+                success: false,
+                message: 'Error sending PDF file',
+                error: err.message
+              });
+            }
+          } else {
+            console.log('PDF file sent successfully:', filename);
+          }
         });
       }
       
-      // Set headers
+      // File doesn't exist - try to regenerate from database
+      console.log('PDF file not found, attempting to regenerate from database...');
+      
+      // Import models (they should already be loaded but ensure they're available)
+      const Quotation = require('./models/Quotation');
+      const Inquiry = require('./models/Inquiry');
+      const pdfService = require('./services/pdfService');
+      
+      // Find quotation by PDF filename
+      const quotation = await Quotation.findOne({ quotationPdf: filename });
+      
+      if (!quotation) {
+        console.error('Quotation not found for PDF:', filename);
+        return res.status(404).json({
+          success: false,
+          message: 'Quotation PDF not found and cannot be regenerated',
+          filename: filename
+        });
+      }
+      
+      // Get inquiry data
+      const inquiry = await Inquiry.findById(quotation.inquiryId).populate('customer', 'firstName lastName companyName email phoneNumber');
+      
+      if (!inquiry) {
+        console.error('Inquiry not found for quotation:', quotation._id);
+        return res.status(404).json({
+          success: false,
+          message: 'Inquiry not found for quotation',
+          quotationId: quotation._id
+        });
+      }
+      
+      // Prepare quotation data for PDF generation
+      const pdfQuotationData = {
+        parts: quotation.items && quotation.items.length > 0 
+          ? quotation.items.map(item => ({
+              partRef: item.partRef || '',
+              material: item.material || 'Zintec',
+              thickness: item.thickness || '1.5',
+              quantity: item.quantity || 1,
+              price: item.unitPrice || 0,
+              remarks: item.remark || ''
+            }))
+          : (inquiry.parts || []).map(part => ({
+              partRef: part.partRef || '',
+              material: part.material || 'Zintec',
+              thickness: part.thickness || '1.5',
+              quantity: part.quantity || 1,
+              price: 0,
+              remarks: part.remarks || ''
+            })),
+        totalAmount: quotation.totalAmount,
+        currency: 'USD',
+        validUntil: quotation.validUntil || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        terms: quotation.terms || 'Standard manufacturing terms apply. Payment required before production begins.'
+      };
+      
+      // Generate PDF
+      console.log('Regenerating PDF from quotation data...');
+      const pdfResult = await pdfService.generateQuotationPDF(inquiry, pdfQuotationData);
+      console.log('PDF regenerated successfully:', pdfResult.fileName);
+      
+      // Update quotation with new filename if different
+      if (pdfResult.fileName !== filename) {
+        quotation.quotationPdf = pdfResult.fileName;
+        await quotation.save();
+      }
+      
+      // Set headers and send the regenerated file
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Content-Disposition', `inline; filename="${pdfResult.fileName}"`);
       
-      // Send file
-      console.log('Sending PDF file:', filename);
-      res.sendFile(filePath, (err) => {
+      console.log('Sending regenerated PDF file:', pdfResult.fileName);
+      res.sendFile(pdfResult.filePath, (err) => {
         if (err) {
-          console.error('Error sending PDF file:', err);
+          console.error('Error sending regenerated PDF file:', err);
           if (!res.headersSent) {
             res.status(500).json({
               success: false,
-              message: 'Error sending PDF file',
+              message: 'Error sending regenerated PDF file',
               error: err.message
             });
           }
         } else {
-          console.log('PDF file sent successfully:', filename);
+          console.log('Regenerated PDF file sent successfully:', pdfResult.fileName);
         }
       });
+      
     } catch (error) {
       console.error('PDF route error:', error);
       if (!res.headersSent) {
