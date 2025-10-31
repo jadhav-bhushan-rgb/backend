@@ -95,14 +95,48 @@ if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
-// File upload middleware - Use absolute paths with proper headers
-app.use('/uploads', (req, res, next) => {
-  // Set proper CORS headers for file access
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET');
-  res.setHeader('Content-Type', 'application/pdf');
-  next();
-}, express.static(path.join(__dirname, 'uploads')));
+// File upload middleware - Serve static files from uploads directory
+// Handle both /uploads and /api/uploads paths for compatibility
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+  setHeaders: (res, filePath) => {
+    // Set proper CORS headers for file access
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    
+    // Set Content-Type based on file extension
+    if (filePath.endsWith('.pdf')) {
+      res.setHeader('Content-Type', 'application/pdf');
+    } else if (filePath.endsWith('.jpg') || filePath.endsWith('.jpeg')) {
+      res.setHeader('Content-Type', 'image/jpeg');
+    } else if (filePath.endsWith('.png')) {
+      res.setHeader('Content-Type', 'image/png');
+    } else if (filePath.endsWith('.zip')) {
+      res.setHeader('Content-Type', 'application/zip');
+    }
+  }
+}));
+
+// Also serve via /api/uploads for API consistency
+app.use('/api/uploads', express.static(path.join(__dirname, 'uploads'), {
+  setHeaders: (res, filePath) => {
+    // Set proper CORS headers for file access
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    
+    // Set Content-Type based on file extension
+    if (filePath.endsWith('.pdf')) {
+      res.setHeader('Content-Type', 'application/pdf');
+    } else if (filePath.endsWith('.jpg') || filePath.endsWith('.jpeg')) {
+      res.setHeader('Content-Type', 'image/jpeg');
+    } else if (filePath.endsWith('.png')) {
+      res.setHeader('Content-Type', 'image/png');
+    } else if (filePath.endsWith('.zip')) {
+      res.setHeader('Content-Type', 'application/zip');
+    }
+  }
+}));
 
 app.use('/test-files', express.static(path.join(__dirname, 'test-files')));
 
