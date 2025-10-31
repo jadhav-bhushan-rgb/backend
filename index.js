@@ -346,9 +346,36 @@ mongoose.connect(MONGODB_URI, {
         });
       }
       
-      // If still not found, try finding by extracting timestamp from filename
+      // If still not found, try finding by inquiry number from filename (format: quotation_INQXXX_TIMESTAMP.pdf)
       if (!quotation) {
-        console.log('Partial match failed, trying timestamp-based search');
+        console.log('Partial match failed, trying inquiry number-based search');
+        // Extract inquiry number from filename (format: quotation_INQUIRYNUMBER_TIMESTAMP.pdf)
+        const inquiryMatch = filename.match(/quotation_(INQ\d+)_(\d+)\.pdf/);
+        if (inquiryMatch) {
+          const inquiryNumber = inquiryMatch[1]; // e.g., INQ251031789
+          console.log('Extracted inquiry number from filename:', inquiryNumber);
+          // Find inquiry by inquiryNumber
+          const foundInquiry = await Inquiry.findOne({ inquiryNumber: inquiryNumber });
+          if (foundInquiry) {
+            console.log('Found inquiry by number:', foundInquiry._id);
+            // Find quotation by inquiryId
+            quotation = await Quotation.findOne({ inquiryId: foundInquiry._id.toString() });
+            if (quotation) {
+              console.log('Found quotation by inquiry ID:', quotation._id, 'PDF filename in DB:', quotation.quotationPdf);
+            } else {
+              // Try with inquiryNumber as string
+              quotation = await Quotation.findOne({ inquiryId: inquiryNumber });
+              if (quotation) {
+                console.log('Found quotation by inquiry number string:', quotation._id);
+              }
+            }
+          }
+        }
+      }
+      
+      // If still not found, try finding by extracting timestamp from filename (format: quotation-TIMESTAMP-RANDOM.pdf)
+      if (!quotation) {
+        console.log('Inquiry number search failed, trying timestamp-based search');
         // Extract timestamp from filename (format: quotation-TIMESTAMP-RANDOM.pdf)
         const timestampMatch = filename.match(/quotation-(\d+)-/);
         if (timestampMatch) {
@@ -361,6 +388,24 @@ mongoose.connect(MONGODB_URI, {
           quotation = await Quotation.findOne({ createdAt: timeRange }).sort({ createdAt: -1 });
           if (quotation) {
             console.log('Found quotation by timestamp:', quotation._id, 'PDF filename in DB:', quotation.quotationPdf);
+          }
+        }
+      }
+      
+      // If still not found, try extracting timestamp from generated format (quotation_INQXXX_TIMESTAMP.pdf)
+      if (!quotation) {
+        console.log('Timestamp search failed, trying generated format timestamp');
+        const generatedTimestampMatch = filename.match(/quotation_[^_]+_(\d+)\.pdf/);
+        if (generatedTimestampMatch) {
+          const timestamp = parseInt(generatedTimestampMatch[1]);
+          console.log('Extracted timestamp from generated format:', timestamp);
+          const timeRange = {
+            $gte: new Date(timestamp - 10000), // 10 seconds window
+            $lte: new Date(timestamp + 10000)
+          };
+          quotation = await Quotation.findOne({ createdAt: timeRange }).sort({ createdAt: -1 });
+          if (quotation) {
+            console.log('Found quotation by generated format timestamp:', quotation._id, 'PDF filename in DB:', quotation.quotationPdf);
           }
         }
       }
