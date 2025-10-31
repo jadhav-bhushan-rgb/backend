@@ -101,9 +101,55 @@ if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
+// IMPORTANT: Handle quotation PDFs BEFORE static middleware
+// This ensures PDF regeneration works even if file doesn't exist
+// We'll register the actual handlers after mongoose connection, but we need to intercept here
+let quotationPDFHandler = null;
+
+// Middleware to intercept quotation PDF requests before static middleware
+const quotationPDFInterceptor = (req, res, next) => {
+  const path = req.path;
+  // Check if this is a quotation PDF request
+  if (path.startsWith('/quotations/') || path.match(/^\/quotations\/[^\/]+\.pdf$/)) {
+    const filename = path.replace('/quotations/', '');
+    if (quotationPDFHandler) {
+      req.params = req.params || {};
+      req.params.filename = filename;
+      return quotationPDFHandler(req, res);
+    }
+    // If handler not ready yet (mongoose not connected), wait a bit
+    const checkHandler = setInterval(() => {
+      if (quotationPDFHandler) {
+        clearInterval(checkHandler);
+        req.params = req.params || {};
+        req.params.filename = filename;
+        quotationPDFHandler(req, res);
+      }
+    }, 100);
+    // Timeout after 5 seconds
+    setTimeout(() => {
+      clearInterval(checkHandler);
+      if (!res.headersSent) {
+        res.status(503).json({ success: false, message: 'Service temporarily unavailable' });
+      }
+    }, 5000);
+    return; // Don't call next()
+  }
+  next(); // Not a quotation PDF, continue to next middleware
+};
+
+app.use('/uploads', quotationPDFInterceptor);
+app.use('/api/uploads', quotationPDFInterceptor);
+
 // File upload middleware - Serve static files from uploads directory
 // Handle both /uploads and /api/uploads paths for compatibility
-app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+// But exclude /uploads/quotations/ which is handled above
+app.use('/uploads', (req, res, next) => {
+  // Skip quotations path - it's handled by explicit routes above
+  if (req.path.startsWith('/quotations/')) {
+    return next();
+  }
+  express.static(path.join(__dirname, 'uploads'), {
   setHeaders: (res, filePath) => {
     // Set proper CORS headers for file access
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -121,10 +167,17 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
       res.setHeader('Content-Type', 'application/zip');
     }
   }
-}));
+})(req, res, next);
+});
 
 // Also serve via /api/uploads for API consistency
-app.use('/api/uploads', express.static(path.join(__dirname, 'uploads'), {
+// But exclude /api/uploads/quotations/ which is handled above
+app.use('/api/uploads', (req, res, next) => {
+  // Skip quotations path - it's handled by explicit routes above
+  if (req.path.startsWith('/quotations/')) {
+    return next();
+  }
+  express.static(path.join(__dirname, 'uploads'), {
   setHeaders: (res, filePath) => {
     // Set proper CORS headers for file access
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -142,7 +195,8 @@ app.use('/api/uploads', express.static(path.join(__dirname, 'uploads'), {
       res.setHeader('Content-Type', 'application/zip');
     }
   }
-}));
+})(req, res, next);
+});
 
 app.use('/test-files', express.static(path.join(__dirname, 'test-files')));
 
@@ -280,11 +334,40 @@ mongoose.connect(MONGODB_URI, {
       const Inquiry = mongoose.model('Inquiry');
       const pdfService = require('./services/pdfService');
       
-      // Find quotation by PDF filename
-      const quotation = await Quotation.findOne({ quotationPdf: filename });
+      // Find quotation by PDF filename (try exact match first)
+      let quotation = await Quotation.findOne({ quotationPdf: filename });
+      
+      // If exact match fails, try partial match (in case filename format slightly differs)
+      if (!quotation) {
+        console.log('Exact match failed, trying partial match for:', filename);
+        // Try to find quotations where quotationPdf contains the filename or vice versa
+        quotation = await Quotation.findOne({ 
+          quotationPdf: { $regex: filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } 
+        });
+      }
+      
+      // If still not found, try finding by extracting timestamp from filename
+      if (!quotation) {
+        console.log('Partial match failed, trying timestamp-based search');
+        // Extract timestamp from filename (format: quotation-TIMESTAMP-RANDOM.pdf)
+        const timestampMatch = filename.match(/quotation-(\d+)-/);
+        if (timestampMatch) {
+          const timestamp = parseInt(timestampMatch[1]);
+          // Find quotations created around that time (within 5 seconds)
+          const timeRange = {
+            $gte: new Date(timestamp - 5000),
+            $lte: new Date(timestamp + 5000)
+          };
+          quotation = await Quotation.findOne({ createdAt: timeRange }).sort({ createdAt: -1 });
+          if (quotation) {
+            console.log('Found quotation by timestamp:', quotation._id, 'PDF filename in DB:', quotation.quotationPdf);
+          }
+        }
+      }
       
       if (!quotation) {
         console.error('Quotation not found for PDF:', filename);
+        console.error('Attempted: exact match, partial match, timestamp-based search');
         return res.status(404).json({
           success: false,
           message: 'Quotation PDF not found and cannot be regenerated',
@@ -401,13 +484,11 @@ mongoose.connect(MONGODB_URI, {
     }
   };
 
-  // Explicit routes for serving quotation PDFs (after all other routes)
-  // This ensures PDF files are served even if routes are registered after static middleware
-  // Also regenerates PDF if file doesn't exist (for Render ephemeral filesystem)
-  // Handle /uploads/quotations/:filename (frontend uses this path)
-  app.get('/uploads/quotations/:filename', async (req, res) => {
+  // Register the quotation PDF handler (called by middleware registered above)
+  quotationPDFHandler = async (req, res) => {
     try {
-      await handleQuotationPDF(req.params.filename, res, req);
+      const filename = req.params.filename;
+      await handleQuotationPDF(filename, res, req);
     } catch (error) {
       console.error('PDF route error:', error);
       console.error('Stack:', error.stack);
@@ -420,25 +501,7 @@ mongoose.connect(MONGODB_URI, {
         });
       }
     }
-  });
-
-  // Handle /api/uploads/quotations/:filename (alternative path)
-  app.get('/api/uploads/quotations/:filename', async (req, res) => {
-    try {
-      await handleQuotationPDF(req.params.filename, res, req);
-    } catch (error) {
-      console.error('PDF route error:', error);
-      console.error('Stack:', error.stack);
-      if (!res.headersSent) {
-        res.status(500).json({
-          success: false,
-          message: 'Server error',
-          error: error.message,
-          stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-        });
-      }
-    }
-  });
+  };
   
   // Error handling middleware (must be last)
   const errorHandler = require('./middleware/errorHandler');
