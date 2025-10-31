@@ -31,6 +31,12 @@ if (!fs.existsSync(inquiriesDir)) {
   fs.mkdirSync(inquiriesDir, { recursive: true });
 }
 
+// Ensure quotations subdirectory exists
+const quotationsDir = path.join(uploadsDir, 'quotations');
+if (!fs.existsSync(quotationsDir)) {
+  fs.mkdirSync(quotationsDir, { recursive: true });
+}
+
 // Security middleware with CSP configuration
 app.use(helmet({
   contentSecurityPolicy: {
@@ -223,6 +229,64 @@ mongoose.connect(MONGODB_URI, {
   app.use('/api/inquiry', zipExtractRoutes);
   app.use('/api/dashboard', dashboardRoutes);
   app.use('/api/analytics', analyticsRoutes);
+  
+  // Explicit route for serving quotation PDFs (after all other routes)
+  // This ensures PDF files are served even if routes are registered after static middleware
+  app.get('/api/uploads/quotations/:filename', (req, res) => {
+    try {
+      const filename = req.params.filename;
+      const filePath = path.join(__dirname, 'uploads', 'quotations', filename);
+      
+      console.log('PDF request:', {
+        filename: filename,
+        filePath: filePath,
+        exists: fs.existsSync(filePath)
+      });
+      
+      // Check if file exists
+      if (!fs.existsSync(filePath)) {
+        console.error('PDF file not found:', filePath);
+        return res.status(404).json({
+          success: false,
+          message: 'PDF file not found',
+          filename: filename,
+          path: filePath
+        });
+      }
+      
+      // Set headers
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      
+      // Send file
+      console.log('Sending PDF file:', filename);
+      res.sendFile(filePath, (err) => {
+        if (err) {
+          console.error('Error sending PDF file:', err);
+          if (!res.headersSent) {
+            res.status(500).json({
+              success: false,
+              message: 'Error sending PDF file',
+              error: err.message
+            });
+          }
+        } else {
+          console.log('PDF file sent successfully:', filename);
+        }
+      });
+    } catch (error) {
+      console.error('PDF route error:', error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          success: false,
+          message: 'Server error',
+          error: error.message
+        });
+      }
+    }
+  });
   
   // Error handling middleware (must be last)
   const errorHandler = require('./middleware/errorHandler');
