@@ -61,7 +61,7 @@ class PDFService {
   // Generate quotation content
   generateQuotationContent(inquiry, quotationData) {
     // Header
-    this.generateHeader(inquiry);
+    this.generateHeader(inquiry, quotationData);
     
     // Customer Information
     this.generateCustomerSection(inquiry);
@@ -80,7 +80,7 @@ class PDFService {
   }
 
   // Generate header with company logo and info
-  generateHeader(inquiry) {
+  generateHeader(inquiry, quotationData) {
     // Company Logo (placeholder - replace with actual logo path)
     // this.doc.image(path.join(__dirname, '../assets/logo.png'), 50, 50, { width: 100 });
     
